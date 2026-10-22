@@ -107,7 +107,7 @@ automation:
           notification_id: fridge_health
           title: Fridge health
           message: "{{ msg }}"
-      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge health
           message: "{{ msg }}"
@@ -126,7 +126,7 @@ automation:
             entity_id: sensor.fridge_health_status
             state: learning
     actions:
-      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge monthly
           message: >
@@ -146,26 +146,31 @@ template:
         unit_of_measurement: W
         device_class: power
         state_class: measurement
+        availability: "{{ states('sensor.fridge_tariff_night') | is_number }}"
         state: >
-          {% set k = states('sensor.fridge_tariff_night') | float(none) %}
-          {{ (k * 1000 / 4) | round(1) if k is not none and 0.05 < k < 1.2 else none }}
+          {% set k = states('sensor.fridge_tariff_night') | float %}
+          {{ (k * 1000 / 4) | round(1) }}
 
       - name: Fridge energy yesterday
         unique_id: fridge_energy_yesterday
         unit_of_measurement: kWh
         device_class: energy
         state_class: measurement
+        availability: "{{ state_attr('sensor.fridge_kwh_today', 'last_period') | is_number }}"
         state: >
-          {% set y = state_attr('sensor.fridge_kwh_today', 'last_period') | float(none) %}
-          {{ y | round(3) if y is not none and y > 0.8 else none }}
+          {% set y = state_attr('sensor.fridge_kwh_today', 'last_period') | float %}
+          {{ y | round(3) }}
 
       - name: Fridge heavy day flag
         unique_id: fridge_heavy_day_flag
         state_class: measurement
+        availability: >
+          {{ state_attr('sensor.fridge_kwh_today', 'last_period') | is_number
+             and states('sensor.fridge_energy_median_30d') | is_number }}
         state: >
-          {% set y = state_attr('sensor.fridge_kwh_today', 'last_period') | float(none) %}
-          {% set m = states('sensor.fridge_energy_median_30d') | float(none) %}
-          {{ (1 if y > 1.25 * m else 0) if y is not none and m is not none and y > 0.8 else none }}
+          {% set y = state_attr('sensor.fridge_kwh_today', 'last_period') | float %}
+          {% set m = states('sensor.fridge_energy_median_30d') | float %}
+          {{ 1 if y > 1.25 * m else 0 }}
 
   - sensor:
       - name: Fridge idle drift
@@ -232,3 +237,4 @@ sensor:
     max_age: {days: 30}
     sampling_size: 45
     precision: 0
+    
