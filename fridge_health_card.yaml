@@ -1,0 +1,27 @@
+# Lovelace (manual card / dashboard YAML) - built-in cards only
+type: vertical-stack
+cards:
+  - type: gauge
+    entity: sensor.fridge_idle_drift
+    name: Fridge idle vs best
+    min: 0
+    max: 40
+    needle: true
+    segments:
+      - {from: 0, color: "#43a047"}
+      - {from: 12, color: "#fb8c00"}
+      - {from: 25, color: "#e53935"}
+  - type: entities
+    entities:
+      - {entity: sensor.fridge_health_status, name: Status}
+      - {entity: sensor.fridge_health_score, name: Health score}
+      - {entity: sensor.fridge_night_idle_median_30d, name: Night idle (30d median)}
+      - {entity: input_number.fridge_base_night_w, name: Best-ever baseline}
+      - {entity: sensor.fridge_energy_median_30d, name: Typical day (grocery days ignored)}
+      - {entity: sensor.fridge_grocery_days_30d, name: Heavy/grocery days (30d)}
+  - type: history-graph
+    title: Night idle W (daily) - 90 days
+    hours_to_show: 2160
+    entities:
+      - sensor.fridge_night_idle
+      - sensor.fridge_night_idle_median_30d
