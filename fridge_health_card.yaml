@@ -23,5 +23,5 @@ cards:
     title: Night idle W (daily) - 90 days
     hours_to_show: 2160
     entities:
-      - sensor.fridge_night_idle
+      - sensor.fridge_night_idle_power
       - sensor.fridge_night_idle_median_30d
