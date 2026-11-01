@@ -1,16 +1,31 @@
 # Lovelace (manual card / dashboard YAML) - built-in cards only
 type: vertical-stack
 cards:
-  - type: gauge
-    entity: sensor.fridge_idle_drift
-    name: Fridge idle vs best
-    min: 0
-    max: 40
-    needle: true
-    segments:
-      - {from: 0, color: "#43a047"}
-      - {from: 12, color: "#fb8c00"}
-      - {from: 25, color: "#e53935"}
+  - type: conditional                 # learning banner (first ~14 nights)
+    conditions:
+      - condition: state
+        entity: sensor.fridge_health_status
+        state: learning
+    card:
+      type: markdown
+      content: >
+        Learning your fridge's normal: **{{ states('sensor.fridge_night_samples_30d') | int(0) }} / 14** nights collected.
+  - type: conditional                 # gauge appears once there is enough data
+    conditions:
+      - condition: state
+        entity: sensor.fridge_health_status
+        state_not: learning
+    card:
+      type: gauge
+      entity: sensor.fridge_idle_drift
+      name: Fridge idle vs best
+      min: 0
+      max: 40
+      needle: true
+      segments:
+        - {from: 0, color: "#43a047"}
+        - {from: 12, color: "#fb8c00"}
+        - {from: 25, color: "#e53935"}
   - type: entities
     entities:
       - {entity: sensor.fridge_health_status, name: Status}
