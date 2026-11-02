@@ -192,7 +192,7 @@ automation:
             entity_id: sensor.fridge_health_status
             state: learning
     actions:
-      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge monthly
           message: >
