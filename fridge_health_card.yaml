@@ -1,7 +1,7 @@
 # Lovelace (manual card / dashboard YAML) - built-in cards only
 type: vertical-stack
 cards:
-  - type: conditional                 # learning banner (first ~14 nights)
+  - type: conditional                 # learning banner (first week)
     conditions:
       - condition: state
         entity: sensor.fridge_health_status
@@ -9,7 +9,7 @@ cards:
     card:
       type: markdown
       content: >
-        Learning your fridge's normal: **{{ states('sensor.fridge_night_samples_30d') | int(0) }} / 14** nights collected.
+        Learning your fridge's normal: **{{ states('sensor.fridge_idle_floor_samples_30d') | int(0) }} / 7** daily samples collected.
   - type: conditional                 # gauge appears once there is enough data
     conditions:
       - condition: state
@@ -20,23 +20,24 @@ cards:
       entity: sensor.fridge_idle_drift
       name: Fridge idle vs best
       min: 0
-      max: 40
+      max: 50
       needle: true
       segments:
         - {from: 0, color: "#43a047"}
-        - {from: 12, color: "#fb8c00"}
-        - {from: 25, color: "#e53935"}
+        - {from: 20, color: "#fb8c00"}
+        - {from: 32, color: "#e53935"}
   - type: entities
     entities:
       - {entity: sensor.fridge_health_status, name: Status}
       - {entity: sensor.fridge_health_score, name: Health score}
-      - {entity: sensor.fridge_night_idle_median_30d, name: Night idle (30d median)}
-      - {entity: input_number.fridge_base_night_w, name: Best-ever baseline}
-      - {entity: sensor.fridge_energy_median_30d, name: Typical day (grocery days ignored)}
+      - {entity: sensor.fridge_idle_floor_median_30d, name: Idle floor (30d median)}
+      - {entity: input_number.fridge_base_idle_w, name: Best-ever baseline}
+      - {entity: sensor.fridge_power_1h, name: Power now (1h avg)}
+      - {entity: sensor.fridge_energy_median_30d, name: Typical day (grocery days shrugged off)}
       - {entity: sensor.fridge_grocery_days_30d, name: Heavy/grocery days (30d)}
   - type: history-graph
-    title: Night idle W (daily) - 90 days
+    title: Idle floor (daily) - 90 days
     hours_to_show: 2160
     entities:
-      - sensor.fridge_night_idle_power
-      - sensor.fridge_night_idle_median_30d
+      - sensor.fridge_idle_floor
+      - sensor.fridge_idle_floor_median_30d
