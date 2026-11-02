@@ -6,7 +6,9 @@
 # Fridge degradation tracker. Source: sensor.fridge_fridge_total_energy (kWh, total_increasing)
 # Zero manual input:
 #   * baseline self-seeds (52.5 W = best 30-day night idle in your 12-month export) and only ever ratchets DOWN
-#   * grocery days can't skew it: metric = median of the 02:00-06:00 idle window (door closed, nobody shopping)
+#   * grocery days can't skew it: metric = median of the nightly idle window (door closed, nobody shopping)
+# Idle window: input_datetime.fridge_idle_start / fridge_idle_end (default 00:30 - 04:30).
+#   Change them any time in the UI (Settings > Devices & services > Helpers). Keep start < end, same day, end before ~06:00.
 #   * grocery days are auto-detected and counted, not excluded by hand
 # One-time edit: the notify service in the three automations marked  # EDIT
 # Fast alert: 1h-average power > 1.5x normal idle for 8h straight (door ajar / seal not holding) -> notification
@@ -20,32 +22,63 @@ input_number:
     unit_of_measurement: W
     mode: box
 
+input_datetime:
+  fridge_idle_start:
+    name: Fridge idle window start
+    has_date: false
+    has_time: true
+  fridge_idle_end:
+    name: Fridge idle window end
+    has_date: false
+    has_time: true
+
 utility_meter:
   fridge_kwh_today:
     source: sensor.fridge_fridge_total_energy
     cycle: daily
-  fridge_tariff:            # accumulates only while select.fridge_tariff = night (02:00-06:00)
+  fridge_tariff:            # accumulates only while select.fridge_tariff = night (the idle window)
     source: sensor.fridge_fridge_total_energy
     cycle: daily
     tariffs: [night, "off"]
 
 automation:
   - id: fridge_night_window
-    alias: Fridge night window switch
-    mode: single
+    alias: Fridge idle window switch
+    mode: restart
     triggers:
       - trigger: time
-        at: "02:00:00"
+        at: input_datetime.fridge_idle_start
       - trigger: time
-        at: "06:00:00"
+        at: input_datetime.fridge_idle_end
+      - trigger: state                 # re-evaluates right after you edit the window
+        entity_id:
+          - input_datetime.fridge_idle_start
+          - input_datetime.fridge_idle_end
       - trigger: homeassistant
         event: start
     actions:
+      - if:                            # first run ever: helpers are unset (00:00) -> seed defaults
+          - condition: state
+            entity_id: input_datetime.fridge_idle_start
+            state: "00:00:00"
+        then:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.fridge_idle_start
+            data:
+              time: "00:30:00"
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.fridge_idle_end
+            data:
+              time: "04:30:00"
       - action: select.select_option
         target:
           entity_id: select.fridge_tariff
         data:
-          option: "{{ 'night' if 2 <= now().hour < 6 else 'off' }}"
+          option: >
+            {% set n = now().strftime('%H:%M:%S') %}
+            {{ 'night' if states('input_datetime.fridge_idle_start') <= n < states('input_datetime.fridge_idle_end') else 'off' }}
 
   - id: fridge_baseline_selfcalibrate
     alias: Fridge baseline self-calibrate
@@ -54,7 +87,9 @@ automation:
       seed_night_w: 52.5
     triggers:
       - trigger: time
-        at: "06:20:00"
+        at:
+          entity_id: input_datetime.fridge_idle_end
+          offset: "00:20:00"
       - trigger: homeassistant
         event: start
     actions:
@@ -175,10 +210,12 @@ automation:
             {{ states('sensor.fridge_grocery_days_30d') | int(0) }} heavy/grocery days.
 
 template:
-  # One daily snapshot at 06:10, after the night window closes and yesterday's meter has rolled over
+  # One daily snapshot 10 min after the idle window closes (after midnight, so yesterday's meter has rolled over)
   - triggers:
       - trigger: time
-        at: "06:10:00"
+        at:
+          entity_id: input_datetime.fridge_idle_end
+          offset: "00:10:00"
     sensor:
       - name: Fridge night idle power
         unique_id: fridge_night_idle_power
@@ -187,7 +224,11 @@ template:
         state_class: measurement
         state: >
           {% set k = states('sensor.fridge_tariff_night') | float(none) %}
-          {{ (k * 1000 / 4) | round(1) if states('select.fridge_tariff') == 'off' and k is not none and 0.05 < k < 1.2 else none }}
+          {% set a = states('input_datetime.fridge_idle_start').split(':') %}
+          {% set b = states('input_datetime.fridge_idle_end').split(':') %}
+          {% set hrs = ((b[0] | int * 60 + b[1] | int) - (a[0] | int * 60 + a[1] | int)) / 60 %}
+          {% set w = k * 1000 / hrs if k is not none and hrs > 0.5 else none %}
+          {{ w | round(1) if states('select.fridge_tariff') == 'off' and w is not none and 10 < w < 300 else none }}
 
       - name: Fridge energy yesterday
         unique_id: fridge_energy_yesterday
