@@ -1,108 +1,76 @@
-# /config/packages/fridge_health.yaml
+# /config/packages/fridge_health.yaml            (v3 - window-free)
 # configuration.yaml needs:
 #   homeassistant:
 #     packages: !include_dir_named packages
 #
 # Fridge degradation tracker. Source: sensor.fridge_fridge_total_energy (kWh, total_increasing)
-# Zero manual input:
-#   * baseline self-seeds (52.5 W = best 30-day night idle in your 12-month export) and only ever ratchets DOWN
-#   * grocery days can't skew it: metric = median of the nightly idle window (door closed, nobody shopping)
-# Idle window: input_datetime.fridge_idle_start / fridge_idle_end (default 00:30 - 04:30).
-#   Change them any time in the UI (Settings > Devices & services > Helpers). Keep start < end, same day, end before ~06:00.
-#   * grocery days are auto-detected and counted, not excluded by hand
-# One-time edit: the notify service in the three automations marked  # EDIT
-# Fast alert: 1h-average power > 1.5x normal idle for 8h straight (door ajar / seal not holding) -> notification
+#
+# HOW IT WORKS (zero manual input)
+#   * Health metric = "idle floor": the 20th percentile of the last 24 h of 1-hour-average power.
+#     Defrost (~1-2 h, every 30-60 h, moves around), door openings, late nights, early risers and grocery
+#     restocks only inflate the UPPER hours, so they can't touch it. No time window, no habit assumptions.
+#     (On your year of data: noise 2% vs 3-4% for any fixed night window, ~1% disturbed days vs 6-9%.)
+#   * One sample per day at 06:10 -> 30-day median -> compared with a baseline.
+#   * Baseline self-seeds at 50.1 W (best 30-day median in your 12-month export) and only ever ratchets DOWN.
+#   * Grocery days: the daily-kWh median shrugs them off (every day goes in; heavy days are only counted, not filtered).
+#   * Fast alert: 1h-average power > 1.5x normal idle for 8 h straight (door ajar / seal not holding).
+#   * Meter-offline alert: source sensor unavailable / silent for 3 h (otherwise a dead meter looks like "recovered").
+#
+# ONE-TIME EDIT: notify service in the 5 automations marked  # EDIT   (notify.mobile_app_<your_phone>)
+# RESET after replacing the fridge (or any permanent change): set input_number.fridge_base_idle_w to 0
+#   -> it re-seeds from the current 30-day median at 06:20 (needs >= 7 samples).
+# Orphans from earlier versions you can delete in the UI: sensor.fridge_night_idle*, sensor.fridge_night_samples_30d,
+#   select.fridge_tariff / sensor.fridge_tariff_*, input_datetime.fridge_idle_*, input_number.fridge_base_night_w
+#
+# TUNING NOTES (all tuned for this fridge, Penang climate - change to taste)
+#   percentile 20      best signal/noise on the year of data (p25 / p33 are slightly noisier and less sensitive)
+#   >= 7 samples       the floor is so stable that one week is enough (a noisy night window needed 14)
+#   watch 20 / clear 14, service 32 / clear 26
+#                      this fridge swings ~12-18% between cool (Nov-Feb ~51 W) and warm months (Mar-Oct ~56-59 W);
+#                      18.4% was the seasonal peak, so 20% leaves headroom. After 12 months compare same-season instead.
+#   for: 12 h          ignore same-morning flaps (06:10 snapshot, 06:20 baseline ratchet) and restarts
+#   sustained 8 h/1.5x year of data: 9 episodes/yr at 8 h (16 at 6 h = too chatty); typical defrost+recovery is 3-5 h
+#   heavy day 1.25x    typical day ~1.55 kWh, grocery days ~1.9-2.4 kWh
+#   health score       100 - 2 x drift% (0 at +50%); watch (20%) therefore reads 60
+#   sampling_size      generous upper bounds; max_age is the binding limit everywhere
+#   sanity bands       15-200 W floor / > 0.3 kWh day only reject "sensor dead / unplugged / absurd" values
 
 input_number:
-  fridge_base_night_w:
-    name: Fridge baseline night idle (auto)
+  fridge_base_idle_w:
+    name: Fridge baseline idle floor (auto)
     min: 0
     max: 500
     step: 0.1
     unit_of_measurement: W
     mode: box
 
-input_datetime:
-  fridge_idle_start:
-    name: Fridge idle window start
-    has_date: false
-    has_time: true
-  fridge_idle_end:
-    name: Fridge idle window end
-    has_date: false
-    has_time: true
-
 utility_meter:
   fridge_kwh_today:
     source: sensor.fridge_fridge_total_energy
     cycle: daily
-  fridge_tariff:            # accumulates only while select.fridge_tariff = night (the idle window)
-    source: sensor.fridge_fridge_total_energy
-    cycle: daily
-    tariffs: [night, "off"]
 
 automation:
-  - id: fridge_night_window
-    alias: Fridge idle window switch
-    mode: restart
-    triggers:
-      - trigger: time
-        at: input_datetime.fridge_idle_start
-      - trigger: time
-        at: input_datetime.fridge_idle_end
-      - trigger: state                 # re-evaluates right after you edit the window
-        entity_id:
-          - input_datetime.fridge_idle_start
-          - input_datetime.fridge_idle_end
-      - trigger: homeassistant
-        event: start
-    actions:
-      - if:                            # first run ever: helpers are unset (00:00) -> seed defaults
-          - condition: state
-            entity_id: input_datetime.fridge_idle_start
-            state: "00:00:00"
-        then:
-          - action: input_datetime.set_datetime
-            target:
-              entity_id: input_datetime.fridge_idle_start
-            data:
-              time: "00:30:00"
-          - action: input_datetime.set_datetime
-            target:
-              entity_id: input_datetime.fridge_idle_end
-            data:
-              time: "04:30:00"
-      - action: select.select_option
-        target:
-          entity_id: select.fridge_tariff
-        data:
-          option: >
-            {% set n = now().strftime('%H:%M:%S') %}
-            {{ 'night' if states('input_datetime.fridge_idle_start') <= n < states('input_datetime.fridge_idle_end') else 'off' }}
-
   - id: fridge_baseline_selfcalibrate
     alias: Fridge baseline self-calibrate
     mode: single
     variables:
-      seed_night_w: 52.5
+      seed_idle_w: 50.1
     triggers:
       - trigger: time
-        at:
-          entity_id: input_datetime.fridge_idle_end
-          offset: "00:20:00"
+        at: "06:20:00"
       - trigger: homeassistant
         event: start
     actions:
       - action: input_number.set_value
         target:
-          entity_id: input_number.fridge_base_night_w
+          entity_id: input_number.fridge_base_idle_w
         data:
           value: >
-            {% set b = states('input_number.fridge_base_night_w') | float(0) %}
-            {% set cur = states('sensor.fridge_night_idle_median_30d') | float(0) %}
-            {% set n = states('sensor.fridge_night_samples_30d') | float(0) %}
-            {% if b <= 0 %}{{ seed_night_w }}
-            {% elif n >= 14 and 30 < cur < b %}{{ cur }}
+            {% set b = states('input_number.fridge_base_idle_w') | float(0) %}
+            {% set cur = states('sensor.fridge_idle_floor_median_30d') | float(0) %}
+            {% set n = states('sensor.fridge_idle_floor_samples_30d') | float(0) %}
+            {% if b <= 0 %}{{ cur if n >= 7 and cur > 30 else seed_idle_w }}
+            {% elif n >= 7 and 30 < cur < b %}{{ cur }}
             {% else %}{{ b }}{% endif %}
 
   - id: fridge_health_alert
@@ -117,7 +85,7 @@ automation:
         id: watch
       - trigger: state
         entity_id: sensor.fridge_health_status
-        from: watch
+        from: [ok, learning, watch]
         to: service
         for: "12:00:00"
         id: service
@@ -130,12 +98,12 @@ automation:
       - variables:
           msg: >
             {% if trigger.id == 'recovered' %}
-            Fridge idle power back to normal ({{ states('sensor.fridge_idle_drift') }}% vs best).
+            Fridge idle floor back to normal ({{ states('sensor.fridge_idle_drift') }}% vs best).
             {% else %}
-            {{ 'SERVICE' if trigger.id == 'service' else 'Watch' }}: fridge night idle is
-            {{ states('sensor.fridge_night_idle_median_30d') }} W, {{ states('sensor.fridge_idle_drift') }}% above its
-            best ({{ states('input_number.fridge_base_night_w') }} W). Typical day {{ states('sensor.fridge_energy_median_30d') }} kWh
-            (grocery days excluded; {{ states('sensor.fridge_grocery_days_30d') | int(0) }} in last 30d).
+            {{ 'SERVICE' if trigger.id == 'service' else 'Watch' }}: fridge idle floor is
+            {{ states('sensor.fridge_idle_floor_median_30d') }} W, {{ states('sensor.fridge_idle_drift') }}% above its
+            best ({{ states('input_number.fridge_base_idle_w') }} W). Typical day {{ states('sensor.fridge_energy_median_30d') }} kWh
+            (median, so the {{ states('sensor.fridge_grocery_days_30d') | int(0) }} heavy days in the last 30d barely move it).
             Check: condenser coil/back dust, door gaskets (paper test), vents blocked, hot room, frost build-up.
             {% endif %}
       - action: persistent_notification.create
@@ -143,7 +111,7 @@ automation:
           notification_id: fridge_health
           title: Fridge health
           message: "{{ msg }}"
-      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge health
           message: "{{ msg }}"
@@ -170,8 +138,8 @@ automation:
       - variables:
           msg: >
             {% if trigger.id == 'alert' %}
-            Fridge has been working hard for 8+ hours (~{{ (states('sensor.fridge_energy_last_hour') | float(0) * 1000) | round(0) }} W vs
-            ~{{ states('sensor.fridge_night_idle_median_30d') }} W normal idle). Door not shut / gasket not sealing /
+            Fridge has been working hard for 8+ hours (~{{ states('sensor.fridge_power_1h') }} W vs
+            ~{{ states('sensor.fridge_idle_floor_median_30d') }} W normal idle floor). Door not shut / gasket not sealing /
             overstuffed or blocked vent? Check the doors now.
             {% else %}
             Fridge load back to normal.
@@ -181,10 +149,34 @@ automation:
           notification_id: fridge_sustained_load
           title: Fridge door / load
           message: "{{ msg }}"
-      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge door / load
           message: "{{ msg }}"
+
+  - id: fridge_meter_offline_alert
+    alias: Fridge meter offline alert
+    mode: single
+    triggers:
+      - trigger: template
+        value_template: >
+          {% set s = states.sensor.fridge_fridge_total_energy %}
+          {{ s is none or s.state in ['unavailable', 'unknown'] or (now() - s.last_updated).total_seconds() > 3 * 3600 }}
+        for: "00:10:00"
+    actions:
+      - action: persistent_notification.create
+        data:
+          notification_id: fridge_meter_offline
+          title: Fridge meter offline
+          message: >
+            The fridge energy sensor has stopped reporting (power cut, plug offline or integration down).
+            Monitoring is blind and the fridge itself may be off - check it.
+      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
+        data:
+          title: Fridge meter offline
+          message: >
+            Fridge energy sensor silent for 3 h+ (power cut / plug offline / integration down).
+            Monitoring is blind and the fridge may be off - check it.
 
   - id: fridge_monthly_digest
     alias: Fridge monthly digest
@@ -200,35 +192,46 @@ automation:
             entity_id: sensor.fridge_health_status
             state: learning
     actions:
-      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge monthly
           message: >
             Health {{ states('sensor.fridge_health_score') }}/100 ({{ states('sensor.fridge_health_status') }}).
-            Night idle {{ states('sensor.fridge_night_idle_median_30d') }} W
+            Idle floor {{ states('sensor.fridge_idle_floor_median_30d') }} W
             ({{ states('sensor.fridge_idle_drift') }}% vs best). Typical day {{ states('sensor.fridge_energy_median_30d') }} kWh,
             {{ states('sensor.fridge_grocery_days_30d') | int(0) }} heavy/grocery days.
 
 template:
-  # One daily snapshot 10 min after the idle window closes (after midnight, so yesterday's meter has rolled over)
+  # Every 5 min: 1-hour-average power in W (from the statistics 'change' of the energy counter).
+  # Only emitted once the 1 h buffer is >= 90% covered, so a restart can't under-report.
   - triggers:
-      - trigger: time
-        at:
-          entity_id: input_datetime.fridge_idle_end
-          offset: "00:10:00"
+      - trigger: time_pattern
+        minutes: "/5"
     sensor:
-      - name: Fridge night idle power
-        unique_id: fridge_night_idle_power
+      - name: Fridge power 1h
+        unique_id: fridge_power_1h
         unit_of_measurement: W
         device_class: power
         state_class: measurement
         state: >
-          {% set k = states('sensor.fridge_tariff_night') | float(none) %}
-          {% set a = states('input_datetime.fridge_idle_start').split(':') %}
-          {% set b = states('input_datetime.fridge_idle_end').split(':') %}
-          {% set hrs = ((b[0] | int * 60 + b[1] | int) - (a[0] | int * 60 + a[1] | int)) / 60 %}
-          {% set w = k * 1000 / hrs if k is not none and hrs > 0.5 else none %}
-          {{ w | round(1) if states('select.fridge_tariff') == 'off' and w is not none and 10 < w < 300 else none }}
+          {% set ok = state_attr('sensor.fridge_energy_last_hour', 'age_coverage_ratio') | float(0) >= 0.9 %}
+          {% set k = states('sensor.fridge_energy_last_hour') | float(none) %}
+          {{ (k * 1000) | round(1) if ok and k is not none and k >= 0 else none }}
+
+  # One daily snapshot at 06:10 (after midnight, so yesterday's meter has rolled over)
+  - triggers:
+      - trigger: time
+        at: "06:10:00"
+    sensor:
+      - name: Fridge idle floor
+        unique_id: fridge_idle_floor
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set w = states('sensor.fridge_idle_floor_24h') | float(none) %}
+          {% set ok = state_attr('sensor.fridge_idle_floor_24h', 'age_coverage_ratio') | float(0) >= 0.9 %}
+          {{ w | round(1) if ok and w is not none and 15 < w < 200 else none }}
 
       - name: Fridge energy yesterday
         unique_id: fridge_energy_yesterday
@@ -237,7 +240,7 @@ template:
         state_class: measurement
         state: >
           {% set y = state_attr('sensor.fridge_kwh_today', 'last_period') | float(none) %}
-          {{ y | round(3) if y is not none and y > 0.8 else none }}
+          {{ y | round(3) if y is not none and y > 0.3 else none }}
 
       - name: Fridge heavy day flag
         unique_id: fridge_heavy_day_flag
@@ -245,19 +248,22 @@ template:
         state: >
           {% set y = state_attr('sensor.fridge_kwh_today', 'last_period') | float(none) %}
           {% set m = states('sensor.fridge_energy_median_30d') | float(none) %}
-          {{ (1 if y > 1.25 * m else 0) if y is not none and m is not none and y > 0.8 else none }}
+          {{ (1 if y > 1.25 * m else 0) if y is not none and m is not none and y > 0.3 else none }}
 
   - binary_sensor:
       - name: Fridge sustained high load
         unique_id: fridge_sustained_high_load
         device_class: problem
         delay_off: "01:00:00"          # bridges 1h dips so one long episode stays one episode
-        availability: "{{ states('sensor.fridge_energy_last_hour') | is_number }}"
+        availability: >
+          {% set s = states.sensor.fridge_fridge_total_energy %}
+          {{ states('sensor.fridge_power_1h') | is_number
+             and s is not none and (now() - s.last_updated).total_seconds() < 900 }}
         state: >
-          {% set ref = states('sensor.fridge_night_idle_median_30d') | float(0) %}
-          {% set ref = ref if ref > 30 else states('input_number.fridge_base_night_w') | float(0) %}
-          {% set ref = ref if ref > 30 else 52.5 %}
-          {{ states('sensor.fridge_energy_last_hour') | float(0) * 1000 > 1.5 * ref }}
+          {% set ref = states('sensor.fridge_idle_floor_median_30d') | float(0) %}
+          {% set ref = ref if ref > 30 else states('input_number.fridge_base_idle_w') | float(0) %}
+          {% set ref = ref if ref > 30 else 50.1 %}
+          {{ states('sensor.fridge_power_1h') | float(0) > 1.5 * ref }}
 
   - sensor:
       - name: Fridge idle drift
@@ -265,21 +271,21 @@ template:
         unit_of_measurement: "%"
         state_class: measurement
         availability: >
-          {{ states('sensor.fridge_night_samples_30d') | float(0) >= 14
-             and states('input_number.fridge_base_night_w') | float(0) > 0
-             and states('sensor.fridge_night_idle_median_30d') | float(0) > 0 }}
+          {{ states('sensor.fridge_idle_floor_samples_30d') | float(0) >= 7
+             and states('input_number.fridge_base_idle_w') | float(0) > 0
+             and states('sensor.fridge_idle_floor_median_30d') | float(0) > 0 }}
         state: >
-          {{ ((states('sensor.fridge_night_idle_median_30d') | float / states('input_number.fridge_base_night_w') | float - 1) * 100) | round(1) }}
+          {{ ((states('sensor.fridge_idle_floor_median_30d') | float / states('input_number.fridge_base_idle_w') | float - 1) * 100) | round(1) }}
 
       - name: Fridge health status
         unique_id: fridge_health_status
         icon: mdi:fridge-alert-outline
         state: >
           {% set d = states('sensor.fridge_idle_drift') | float(none) %}
-          {% set prev = this.state | default('learning') %}
+          {% set prev = this.state if this.state in ['ok', 'watch', 'service', 'learning'] else 'learning' %}
           {%- if d is none -%}learning
-          {%- elif d >= 25 or (prev == 'service' and d >= 19) -%}service
-          {%- elif d >= 12 or (prev in ['watch', 'service'] and d >= 8) -%}watch
+          {%- elif d >= 32 or (prev == 'service' and d >= 26) -%}service
+          {%- elif d >= 20 or (prev in ['watch', 'service'] and d >= 14) -%}watch
           {%- else -%}ok{%- endif -%}
 
       - name: Fridge health score
@@ -290,22 +296,41 @@ template:
         state: "{{ [0, [100, 100 - 2 * states('sensor.fridge_idle_drift') | float(0)] | min] | max | round(0) }}"
 
 sensor:
-  - platform: statistics
-    name: Fridge night idle median 30d
-    unique_id: fridge_night_idle_median_30d
-    entity_id: sensor.fridge_night_idle_power
-    state_characteristic: median
-    max_age: {days: 30}
-    sampling_size: 45
+  - platform: statistics            # 1 h energy change -> 1 h average power
+    name: Fridge energy last hour
+    unique_id: fridge_energy_last_hour
+    entity_id: sensor.fridge_fridge_total_energy
+    state_characteristic: change
+    max_age: {hours: 1}
+    sampling_size: 2000
+    precision: 3
+
+  - platform: statistics            # 20th percentile of the last 24 h of 1 h-average power = idle floor
+    name: Fridge idle floor 24h
+    unique_id: fridge_idle_floor_24h
+    entity_id: sensor.fridge_power_1h
+    state_characteristic: percentile
+    percentile: 20
+    max_age: {hours: 24}
+    sampling_size: 400
     precision: 1
 
   - platform: statistics
-    name: Fridge night samples 30d
-    unique_id: fridge_night_samples_30d
-    entity_id: sensor.fridge_night_idle_power
+    name: Fridge idle floor median 30d
+    unique_id: fridge_idle_floor_median_30d
+    entity_id: sensor.fridge_idle_floor
+    state_characteristic: median
+    max_age: {days: 30}
+    sampling_size: 40
+    precision: 1
+
+  - platform: statistics
+    name: Fridge idle floor samples 30d
+    unique_id: fridge_idle_floor_samples_30d
+    entity_id: sensor.fridge_idle_floor
     state_characteristic: count
     max_age: {days: 30}
-    sampling_size: 45
+    sampling_size: 40
 
   - platform: statistics
     name: Fridge energy median 30d
@@ -313,7 +338,7 @@ sensor:
     entity_id: sensor.fridge_energy_yesterday
     state_characteristic: median
     max_age: {days: 30}
-    sampling_size: 45
+    sampling_size: 40
     precision: 2
 
   - platform: statistics
@@ -322,14 +347,5 @@ sensor:
     entity_id: sensor.fridge_heavy_day_flag
     state_characteristic: sum
     max_age: {days: 30}
-    sampling_size: 45
+    sampling_size: 40
     precision: 0
-
-  - platform: statistics
-    name: Fridge energy last hour
-    unique_id: fridge_energy_last_hour
-    entity_id: sensor.fridge_fridge_total_energy
-    state_characteristic: change
-    max_age: {hours: 1}
-    sampling_size: 120
-    precision: 3
