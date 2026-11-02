@@ -111,7 +111,7 @@ automation:
           notification_id: fridge_health
           title: Fridge health
           message: "{{ msg }}"
-      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge health
           message: "{{ msg }}"
@@ -149,7 +149,7 @@ automation:
           notification_id: fridge_sustained_load
           title: Fridge door / load
           message: "{{ msg }}"
-      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge door / load
           message: "{{ msg }}"
@@ -171,7 +171,7 @@ automation:
           message: >
             The fridge energy sensor has stopped reporting (power cut, plug offline or integration down).
             Monitoring is blind and the fridge itself may be off - check it.
-      - action: notify.notify          # EDIT -> notify.mobile_app_<your_phone>
+      - action: notify.mobile_app_oneplus_11          # EDIT -> notify.mobile_app_<your_phone>
         data:
           title: Fridge meter offline
           message: >
